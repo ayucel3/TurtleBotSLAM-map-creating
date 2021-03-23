@@ -44,15 +44,16 @@ int main(int argc, char **argv)
 	
 	ros::Rate rate(4);
 	rate.sleep();
-
+	
 	while (ros::ok()) {
 		//ROS_INFO_STREAM(::distance);
 		geometry_msgs::Twist msg;
-		if(::turn == true){
+		if(turn){
 			msg.angular.z = 1.9;
 			msg.linear.x = -0.1;//if it is stuck it might help
 		}
 		else{
+		  msg.angular.z = 0.0;
 			msg.linear.x = 0.2;
 		}
         	pub.publish(msg);   //This line is for publishing. It publishes to '/cmd_vel' 
