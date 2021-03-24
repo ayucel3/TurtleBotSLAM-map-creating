@@ -3,8 +3,10 @@
 #include <sensor_msgs/LaserScan.h>
 #include <ros/console.h>
 #include <iostream>
+#include <cmath>
 
 #define DEBUG 1
+#define RAD_FROM_DEG(x) (x * 180/PI)
 
 enum State { START, TURN_LEFT, ALONG_WALL, TURN_RIGHT };
 
@@ -20,9 +22,12 @@ sensor_msgs::LaserScan data;
 
 //I DID NOT USE THIS since the sensors are not giving exactly what we want instead I used a threshold
 bool equal(float a, float b) {
-  float ratio = a/b;
   float threshold = 0.995;
-  return (ratio > threshold) && (ratio < 1/threshold);
+  if(0.0 != b) {
+    float ratio = a/b;
+    return (ratio > threshold) && (ratio < 1/threshold);
+  }
+  return abs(a) < 1/threshold - 1;
 }
 
 //Taking the vision info
@@ -43,7 +48,8 @@ void callback_laser(const sensor_msgs::LaserScan::ConstPtr& laser_msg)
 }
 
 bool parallel_to_wall() {
-  return equal(front, back);
+  return equal(front, back) || equal(cos(RAD_FROM_DEG(comp_angle)), center/front) ||
+    equal(cos(RAD_FROM_DEG(comp_angle)), center/back);
 }
 
 bool wall_getting_closer() {
@@ -82,7 +88,7 @@ int main(int argc, char **argv)
 
   ros::Publisher pub = nh.advertise<geometry_msgs::Twist>("/cmd_vel", 1000);
 
-  ros::Subscriber sub_laser = nh.subscribe("/scan", 1, callback_laser);
+  ros::Subscriber sub_laser = nh.subscribe("/scan", 1000, callback_laser);
 	
 	
   ros::Rate rate(4);
@@ -123,7 +129,7 @@ int main(int argc, char **argv)
 #endif
       		}
       		else {
-			msg.angular.z = angular_speed;
+		  msg.angular.z = angular_speed;
 			msg.linear.x = 0.0;
 			should_publish = true;
       		}
@@ -161,7 +167,7 @@ int main(int argc, char **argv)
 #endif
       		}
       		else {
-			msg.angular.z = -angular_speed;
+		  msg.angular.z = -angular_speed;
 			msg.linear.x = 0.0;
 			should_publish = true;
 			
