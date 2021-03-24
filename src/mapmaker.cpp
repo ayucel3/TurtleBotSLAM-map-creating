@@ -9,11 +9,15 @@
 enum State { START, TURN_LEFT, ALONG_WALL, TURN_RIGHT };
 
 const double PI = 3.41592653589793238;
-const float HUG_DIST = 0.5;
-const int comp_angle = 10;
+const float HUG_DIST = 0.4;
+const int comp_angle = 5;
+const float threshold_parallel = 0.005;
+const float linear_speed = 0.2;
+const double angular_speed = PI/8;
 
 sensor_msgs::LaserScan data;
 
+//I DID NOT USE THIS since the sensors are not giving exactly what we want instead I used a threshold
 bool equal(float a, float b) {
   float ratio = a/b;
   return (ratio > 0.9999) && (ratio < 1.0001);
@@ -34,18 +38,37 @@ void callback_laser(const sensor_msgs::LaserScan::ConstPtr& laser_msg)
 }
 
 bool parallel_to_wall() {
-  return equal(data.ranges[90 - comp_angle], data.ranges[90 + comp_angle]);
+	if (((data.ranges[270 - comp_angle] - data.ranges[270 + comp_angle]) < threshold_parallel) and (isinf(data.ranges[270 - comp_angle]) == false) and (isinf(data.ranges[270 + comp_angle]) == false))
+		{return true;}
+	else{return false;}
+  //return equal(data.ranges[90 - comp_angle], data.ranges[90 + comp_angle]);
 }
 
-float which_direction() {
-  //parallel: return 0
-  if(parallel_to_wall()) {
-    return 0.0;
-  }
-  //wall turns left: return <0
-  //wall turns right: return >0
-  return data.ranges[90 - comp_angle] - data.ranges[90 + comp_angle];
+bool keep_going(){
+	if (isinf(data.ranges[270]) or data.ranges[0] < HUG_DIST){
+		return false;
+	}
+	return true;
 }
+
+
+float which_direction() {
+  	//parallel: return 0
+  	if(keep_going()) {
+  		return 0.0;
+  	}
+  	//if its not parallel but also the angles sees inf 
+  	else if(isinf(data.ranges[270])){
+  		return PI/2;
+}
+  	//wall turns left: return <0
+  	//wall turns right: return >0
+  	else{
+  		return data.ranges[270 - comp_angle] - data.ranges[270 + comp_angle];
+  	}
+}
+
+
 
 int main(int argc, char **argv)
 {
@@ -55,12 +78,13 @@ int main(int argc, char **argv)
 
   ros::Publisher pub = nh.advertise<geometry_msgs::Twist>("/cmd_vel", 1000);
 
-  ros::Subscriber sub_laser = nh.subscribe("/scan", 100, callback_laser);
+  ros::Subscriber sub_laser = nh.subscribe("/scan", 1, callback_laser);
 	
 	
   ros::Rate rate(4);
   rate.sleep();
-
+	
+  ros::spinOnce();
   State state = START;
   geometry_msgs::Twist msg;
   msg.angular.x = 0.0;
@@ -70,53 +94,59 @@ int main(int argc, char **argv)
   float which_way = 0.0;
   while (ros::ok()) {
     switch(state) {
-    case START:
-      if(data.ranges[0] <= HUG_DIST) {
-	state = TURN_LEFT;
-      }
-      else {
-	msg.angular.z = 0.0;
-	msg.linear.x = 1.0;
-      }
-      break;
-    case TURN_LEFT:
-      if(parallel_to_wall()) {
-	state = ALONG_WALL;
-      }
-      else {
-	msg.angular.z = PI/2;
-	msg.linear.x = 0.0;
-      }
-      break;
-    case ALONG_WALL:
-      which_way = which_direction();
-      if(which_way < 0.0) {
-	state = TURN_LEFT;
-      }
-      else if(which_way > 0.0) {
-	state = TURN_RIGHT;
-      }
-      else {
-	msg.linear.x = 1.0;
-	msg.angular.z = 0.0;
-      }
-      break;
-    case TURN_RIGHT:
-      if(parallel_to_wall()) {
-	state = ALONG_WALL;
-      }
-      else {
-	msg.angular.z = -PI/2;
-	msg.linear.x = 0.0;
-      }
-      break;
-    default:
-      std::cerr << "Error: unknown state " << state << std::endl;
-      exit(state);
+    	case START:
+		ROS_INFO("START");
+      		if(data.ranges[0] <= HUG_DIST) {
+			state = TURN_LEFT;
+      		}
+      		else {
+			msg.angular.z = 0.0;
+			msg.linear.x = linear_speed;
+      		}
+      		break;
+    	case TURN_LEFT:
+		ROS_INFO("TURN LEFT");
+      		if(parallel_to_wall()) {
+			state = ALONG_WALL;
+      		}
+      		else {
+			msg.angular.z = angular_speed;
+			msg.linear.x = 0.0;
+      		}
+      		break;
+    	case ALONG_WALL:
+		ROS_INFO("ALONG WALL");
+      		which_way = which_direction();
+      		if(which_way < 0.0) {
+			state = TURN_LEFT;
+      		}
+      		else if(which_way > 0.0) {
+			state = TURN_RIGHT;
+      		}
+      		else {
+			msg.linear.x = linear_speed;
+			msg.angular.z = 0.0;
+      		}
+      		break;
+    	case TURN_RIGHT:
+		ROS_INFO("TURN RIGHT");
+      		if(parallel_to_wall()) {
+			state = ALONG_WALL;
+      		}
+      		else {
+			msg.angular.z = -angular_speed;
+			msg.linear.x = 0.0;
+			
+      		}
+      		break;
+    	default:
+      		std::cerr << "Error: unknown state " << state << std::endl;
+      		exit(state);
     }
-    
-    pub.publish(msg);   //This line is for publishing. It publishes to '/cmd_vel' 
 
     ros::spinOnce();
+    
+    pub.publish(msg);   //This line is for publishing. It publishes to '/cmd_vel' 
+    
   }
 }	
