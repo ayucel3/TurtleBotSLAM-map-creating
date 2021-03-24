@@ -9,18 +9,20 @@
 enum State { START, TURN_LEFT, ALONG_WALL, TURN_RIGHT };
 
 const double PI = 3.41592653589793238;
-const float HUG_DIST = 0.4;
+const float HUG_DIST = 0.5;
 const int comp_angle = 5;
 const float threshold_parallel = 0.005;
 const float linear_speed = 0.2;
 const double angular_speed = PI/8;
+float front = 0.0, back = 0.0, center = 0.0;
 
 sensor_msgs::LaserScan data;
 
 //I DID NOT USE THIS since the sensors are not giving exactly what we want instead I used a threshold
 bool equal(float a, float b) {
   float ratio = a/b;
-  return (ratio > 0.9999) && (ratio < 1.0001);
+  float threshold = 0.995;
+  return (ratio > threshold) && (ratio < 1/threshold);
 }
 
 //Taking the vision info
@@ -35,37 +37,39 @@ void callback_laser(const sensor_msgs::LaserScan::ConstPtr& laser_msg)
   data.range_max = laser_msg->range_max;
   data.ranges = laser_msg->ranges;
   data.intensities = laser_msg->intensities;
+  front = data.ranges[270 + comp_angle];
+  back = data.ranges[270 - comp_angle];
+  center = data.ranges[270];
 }
 
 bool parallel_to_wall() {
-	if (((data.ranges[270 - comp_angle] - data.ranges[270 + comp_angle]) < threshold_parallel) and (isinf(data.ranges[270 - comp_angle]) == false) and (isinf(data.ranges[270 + comp_angle]) == false))
-		{return true;}
-	else{return false;}
-  //return equal(data.ranges[90 - comp_angle], data.ranges[90 + comp_angle]);
+  return equal(front, back);
 }
 
-bool keep_going(){
-	if (isinf(data.ranges[270]) or data.ranges[0] < HUG_DIST){
-		return false;
-	}
-	return true;
+bool wall_getting_closer() {
+  return !equal(front, back) && (front < back);
 }
+
+bool wall_getting_further() {
+  return !equal(front, back) && (front > back);
+}
+
+// bool keep_going(){
+// 	if (isinf(center) or data.ranges[0] < HUG_DIST){
+// 		return false;
+// 	}
+// 	return true;
+// }
 
 
 float which_direction() {
-  	//parallel: return 0
-  	if(keep_going()) {
-  		return 0.0;
-  	}
-  	//if its not parallel but also the angles sees inf 
-  	else if(isinf(data.ranges[270])){
-  		return PI/2;
-}
-  	//wall turns left: return <0
-  	//wall turns right: return >0
-  	else{
-  		return data.ranges[270 - comp_angle] - data.ranges[270 + comp_angle];
-  	}
+  //parallel: return 0
+  if(parallel_to_wall()) return 0.0;
+  if(isinf(front) && isinf(center) && isinf(back)) return 0.0;
+  if(isinf(front)) return 1.0;
+  //wall turns left: return <0
+  //wall turns right: return >0
+  return front - back;
 }
 
 
@@ -83,8 +87,6 @@ int main(int argc, char **argv)
 	
   ros::Rate rate(4);
   rate.sleep();
-	
-  ros::spinOnce();
   State state = START;
   geometry_msgs::Twist msg;
   msg.angular.x = 0.0;
@@ -92,50 +94,76 @@ int main(int argc, char **argv)
   msg.linear.y = 0.0;
   msg.linear.z = 0.0;
   float which_way = 0.0;
+  bool should_publish = true;
   while (ros::ok()) {
+    ros::spinOnce();
     switch(state) {
     	case START:
-		ROS_INFO("START");
+	  //ROS_INFO("START");
       		if(data.ranges[0] <= HUG_DIST) {
 			state = TURN_LEFT;
+			should_publish = false;
+#if DEBUG
+			std::cout << "STATE_CHANGE Found a wall. Turning left" << std::endl;
+#endif
       		}
       		else {
 			msg.angular.z = 0.0;
 			msg.linear.x = linear_speed;
+			should_publish = true;
       		}
       		break;
     	case TURN_LEFT:
-		ROS_INFO("TURN LEFT");
+	  //ROS_INFO("TURN LEFT");
       		if(parallel_to_wall()) {
 			state = ALONG_WALL;
+			should_publish = false;
+#if DEBUG
+			std::cout << "STATE_CHANGE Now parallel to wall" << std::endl;
+#endif
       		}
       		else {
 			msg.angular.z = angular_speed;
 			msg.linear.x = 0.0;
+			should_publish = true;
       		}
       		break;
     	case ALONG_WALL:
-		ROS_INFO("ALONG WALL");
+	  //ROS_INFO("ALONG WALL");
       		which_way = which_direction();
-      		if(which_way < 0.0) {
+      		if(wall_getting_closer()) {
+#if DEBUG
+		  std::cout << "STATE_CHANGE Wall is getting closer. Turning left" << std::endl;
+#endif
 			state = TURN_LEFT;
+			should_publish = false;
       		}
-      		else if(which_way > 0.0) {
+      		else if(wall_getting_further()) {
+#if DEBUG
+		  std::cout << "STATE_CHANGE Wall is getting further. Turning right" << std::endl;
+#endif
 			state = TURN_RIGHT;
+			should_publish = false;
       		}
       		else {
 			msg.linear.x = linear_speed;
 			msg.angular.z = 0.0;
+			should_publish = true;
       		}
       		break;
     	case TURN_RIGHT:
-		ROS_INFO("TURN RIGHT");
+	  //ROS_INFO("TURN RIGHT");
       		if(parallel_to_wall()) {
 			state = ALONG_WALL;
+			should_publish = false;
+#if DEBUG
+			std::cout << "STATE_CHANGE Parallel to wall. About to move forward" << std::endl;
+#endif
       		}
       		else {
 			msg.angular.z = -angular_speed;
 			msg.linear.x = 0.0;
+			should_publish = true;
 			
       		}
       		break;
@@ -144,9 +172,9 @@ int main(int argc, char **argv)
       		exit(state);
     }
 
-    ros::spinOnce();
-    
-    pub.publish(msg);   //This line is for publishing. It publishes to '/cmd_vel' 
+    if(should_publish) {
+      pub.publish(msg);   //This line is for publishing. It publishes to '/cmd_vel'
+    }
     
   }
 }	
