@@ -61,6 +61,9 @@ bool wall_getting_further() {
 }
 
 bool wall_in_front() {
+#if DEBUG
+  std::cout << "Distance to wall in front is " << data.ranges[0] << std::endl;
+#endif
   if(isinf(data.ranges[0])) return false;
   return equal(HUG_DIST, data.ranges[0]) || (data.ranges[0] < HUG_DIST);
 }
@@ -87,6 +90,7 @@ float which_direction() {
   return front - back;
 }
 
+//gets the angle the robot needs to turn to be parallel to the wall in front of it
 float get_front_angle() {
   if(isinf(data.ranges[0])) return 0;
   if(isinf(data.ranges[comp_angle])) return RAD_FROM_DEG(comp_angle);
@@ -95,6 +99,7 @@ float get_front_angle() {
   return PI - turn_angle;
 }
 
+//gets the angle the robot needs to turn to be parallel to the wall on its right
 float get_right_angle() {
   if(isinf(data.ranges[0])) return RAD_FROM_DEG(270);
   if(isinf(data.ranges[270+comp_angle])) return RAD_FROM_DEG(270+comp_angle);
@@ -164,12 +169,12 @@ int main(int argc, char **argv)
 #endif
       }
       else if(center < 2*HUG_DIST) {
-	msg.angular.z = get_right_angle();
+	msg.angular.z = get_right_angle()/2;
 	msg.linear.x = 0.0;
 	should_publish = true;
       }
       else {
-	msg.angular.z = get_front_angle();
+	msg.angular.z = get_front_angle()/2;
 	msg.linear.x - 0.0;
 	should_publish = true;
       }
@@ -178,7 +183,7 @@ int main(int argc, char **argv)
     case FOLLOW_WALL: //There's a wall on the right, so follow it
       msg.linear.x = linear_speed;
       should_publish = true;
-      if(wall_in_front()) {
+      if(wall_in_front() && (get_front_angle() > 4*PI/9)) {
 	state = CORNER;
 	should_publish = false;
 #if DEBUG
@@ -198,7 +203,7 @@ int main(int argc, char **argv)
 	}
       }
       else if(wall_on_right() || (center < 1.5*HUG_DIST)) {
-	msg.angular.z = get_right_angle();
+	msg.angular.z = get_right_angle()/2;
       }
       else {
 	msg.angular.z = PI/2;
