@@ -6,7 +6,7 @@
 #include <cmath>
 
 #define DEBUG 1
-#define RAD_FROM_DEG(x) (x * 180/PI)
+#define RAD_FROM_DEG(x) (x * PI/180)
 
 enum State { START, TURN_LEFT, ALONG_WALL, TURN_RIGHT };
 
@@ -78,6 +78,23 @@ float which_direction() {
   return front - back;
 }
 
+float get_front_angle() {
+  if(isinf(data.ranges[0])) return 0;
+  if(isinf(data.ranges[comp_angle])) return RAD_FROM_DEG(comp_angle);
+  float a = data.ranges[0], b = data.ranges[comp_angle];
+  float c = sqrt(pow(a,2) + pow(b,2) - 2*a*b*cos(comp_angle));
+  float cos_angle_b = (pow(a,2) + pow(c,2) - pow(b,2))/(2*a*c);
+  return acos(cos_angle_b);
+}
+
+float get_right_angle() {
+  if(isinf(center)) return RAD_FROM_DEG(270);
+  if(isinf(front)) return RAD_FROM_DEG(270 + comp_angle);;
+  float wall_dist = sqrt(pow(center,2) + pow(front,2) - 2*center*front*cos(comp_angle));
+  float cos_angle = (pow(wall_dist, 2) + pow(center,2) - pow(front,2));
+  return -acos(cos_angle);
+}
+
 
 
 int main(int argc, char **argv)
@@ -129,7 +146,7 @@ int main(int argc, char **argv)
 #endif
       		}
       		else {
-		  msg.angular.z = angular_speed;
+		  msg.angular.z = get_front_angle();
 			msg.linear.x = 0.0;
 			should_publish = true;
       		}
@@ -167,7 +184,7 @@ int main(int argc, char **argv)
 #endif
       		}
       		else {
-		  msg.angular.z = -angular_speed;
+		  msg.angular.z = get_right_angle();
 			msg.linear.x = 0.0;
 			should_publish = true;
 			
