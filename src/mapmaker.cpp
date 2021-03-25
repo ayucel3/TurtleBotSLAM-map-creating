@@ -8,7 +8,7 @@
 #define DEBUG 1
 #define RAD_FROM_DEG(x) (x * PI/180)
 
-enum State { START, TURN_LEFT, ALONG_WALL, TURN_RIGHT };
+enum State { WALL_SEARCH, FOUND_WALL, FOLLOW_WALL, CORNER };
 
 const double PI = 3.41592653589793238;
 const float HUG_DIST = 0.5;
@@ -60,6 +60,15 @@ bool wall_getting_further() {
   return !equal(front, back) && (front > back);
 }
 
+bool wall_in_front() {
+  if(isinf(data.ranges[0])) return false;
+  return equal(HUG_DIST, data.ranges[0]) || (data.ranges[0] < HUG_DIST);
+}
+
+bool wall_on_right() {
+  return !isinf(center) && (equal(HUG_DIST, center) || (center < HUG_DIST));
+}
+
 // bool keep_going(){
 // 	if (isinf(center) or data.ranges[0] < HUG_DIST){
 // 		return false;
@@ -71,7 +80,7 @@ bool wall_getting_further() {
 float which_direction() {
   //parallel: return 0
   if(parallel_to_wall()) return 0.0;
-  if(isinf(front) && isinf(center) && isinf(back)) return 0.0;
+  if(isinf(front) && isinf(center) && isinf(back)) return 0.0; 
   if(isinf(front)) return 1.0;
   //wall turns left: return <0
   //wall turns right: return >0
@@ -81,18 +90,17 @@ float which_direction() {
 float get_front_angle() {
   if(isinf(data.ranges[0])) return 0;
   if(isinf(data.ranges[comp_angle])) return RAD_FROM_DEG(comp_angle);
-  float a = data.ranges[0], b = data.ranges[comp_angle];
-  float c = sqrt(pow(a,2) + pow(b,2) - 2*a*b*cos(comp_angle));
-  float cos_angle_b = (pow(a,2) + pow(c,2) - pow(b,2))/(2*a*c);
-  return acos(cos_angle_b);
+  float wall_dist = sqrt(pow(data.ranges[0],2) + pow(data.ranges[comp_angle],2) - 2*data.ranges[0]*data.ranges[comp_angle]*cos(RAD_FROM_DEG(comp_angle)));
+  float turn_angle = acos((pow(wall_dist, 2) + pow(data.ranges[0],2) - pow(data.ranges[comp_angle],2)) / (2*wall_dist*data.ranges[0]));
+  return PI - turn_angle;
 }
 
 float get_right_angle() {
-  if(isinf(center)) return RAD_FROM_DEG(270);
-  if(isinf(front)) return RAD_FROM_DEG(270 + comp_angle);;
-  float wall_dist = sqrt(pow(center,2) + pow(front,2) - 2*center*front*cos(comp_angle));
-  float cos_angle = (pow(wall_dist, 2) + pow(center,2) - pow(front,2));
-  return -acos(cos_angle);
+  if(isinf(data.ranges[0])) return RAD_FROM_DEG(270);
+  if(isinf(data.ranges[270+comp_angle])) return RAD_FROM_DEG(270+comp_angle);
+  float wall_dist = sqrt(pow(front,2) + pow(center,2) - 2*front*center*cos(RAD_FROM_DEG(comp_angle)));
+  float wall_angle = acos((pow(wall_dist,2) + pow(center,2) - pow(front,2))/(2*wall_dist*center));
+  return PI/2 - wall_angle;
 }
 
 
@@ -110,7 +118,7 @@ int main(int argc, char **argv)
 	
   ros::Rate rate(4);
   rate.sleep();
-  State state = START;
+  State state = WALL_SEARCH;
   geometry_msgs::Twist msg;
   msg.angular.x = 0.0;
   msg.angular.y = 0.0;
@@ -118,86 +126,117 @@ int main(int argc, char **argv)
   msg.linear.z = 0.0;
   float which_way = 0.0;
   bool should_publish = true;
+#if DEBUG
+  std::cout << "Starting" << std::endl;
+#endif
   while (ros::ok()) {
     ros::spinOnce();
     switch(state) {
-    	case START:
-	  //ROS_INFO("START");
-      		if(data.ranges[0] <= HUG_DIST) {
-			state = TURN_LEFT;
-			should_publish = false;
+      
+    case WALL_SEARCH: //Robot is lost! Where's the wall?
+      if(wall_on_right()) {
+	state = FOLLOW_WALL;
+	should_publish = false;
 #if DEBUG
-			std::cout << "STATE_CHANGE Found a wall. Turning left" << std::endl;
+	std::cout << "STATE_CHANGE Wall on right. Following" << std::endl;
 #endif
-      		}
-      		else {
-			msg.angular.z = 0.0;
-			msg.linear.x = linear_speed;
-			should_publish = true;
-      		}
-      		break;
-    	case TURN_LEFT:
-	  //ROS_INFO("TURN LEFT");
-      		if(parallel_to_wall()) {
-			state = ALONG_WALL;
-			should_publish = false;
+      }
+      if(wall_in_front()) {
+	state = FOUND_WALL;
+	should_publish = false;
 #if DEBUG
-			std::cout << "STATE_CHANGE Now parallel to wall" << std::endl;
+	std::cout << "STATE_CHANGE Found a wall. Turning left" << std::endl;
 #endif
-      		}
-      		else {
-		  msg.angular.z = get_front_angle();
-			msg.linear.x = 0.0;
-			should_publish = true;
-      		}
-      		break;
-    	case ALONG_WALL:
-	  //ROS_INFO("ALONG WALL");
-      		which_way = which_direction();
-      		if(wall_getting_closer()) {
+      }
+      else {
+	msg.angular.z = 0.0;
+	msg.linear.x = linear_speed;
+	should_publish = true;
+      }
+      break;
+      
+    case FOUND_WALL: //There's a wall in front, so prepare to follow it
+      if(wall_on_right()) {
+	state = FOLLOW_WALL;
+	should_publish = false;
 #if DEBUG
-		  std::cout << "STATE_CHANGE Wall is getting closer. Turning left" << std::endl;
+	std::cout << "STATE_CHANGE Wall on right. Following" << std::endl;
 #endif
-			state = TURN_LEFT;
-			should_publish = false;
-      		}
-      		else if(wall_getting_further()) {
+      }
+      else if(center < 2*HUG_DIST) {
+	msg.angular.z = get_right_angle();
+	msg.linear.x = 0.0;
+	should_publish = true;
+      }
+      else {
+	msg.angular.z = get_front_angle();
+	msg.linear.x - 0.0;
+	should_publish = true;
+      }
+      break;
+      
+    case FOLLOW_WALL: //There's a wall on the right, so follow it
+      msg.linear.x = linear_speed;
+      should_publish = true;
+      if(wall_in_front()) {
+	state = CORNER;
+	should_publish = false;
 #if DEBUG
-		  std::cout << "STATE_CHANGE Wall is getting further. Turning right" << std::endl;
+	std::cout << "STATE_CHANGE Found a corner." << std::endl;
 #endif
-			state = TURN_RIGHT;
-			should_publish = false;
-      		}
-      		else {
-			msg.linear.x = linear_speed;
-			msg.angular.z = 0.0;
-			should_publish = true;
-      		}
-      		break;
-    	case TURN_RIGHT:
-	  //ROS_INFO("TURN RIGHT");
-      		if(parallel_to_wall()) {
-			state = ALONG_WALL;
-			should_publish = false;
+      }
+      else if(isinf(front)) {
+	if(isinf(center)) {
+	  state = WALL_SEARCH;
+	  should_publish = false;
 #if DEBUG
-			std::cout << "STATE_CHANGE Parallel to wall. About to move forward" << std::endl;
+	  std::cout << "STATE_CHANGE Lost the wall on the right. Now searching for another" << std::endl;
 #endif
-      		}
-      		else {
-		  msg.angular.z = get_right_angle();
-			msg.linear.x = 0.0;
-			should_publish = true;
-			
-      		}
-      		break;
-    	default:
-      		std::cerr << "Error: unknown state " << state << std::endl;
-      		exit(state);
+	}
+	else {
+	  msg.angular.z = RAD_FROM_DEG(comp_angle-90);
+	}
+      }
+      else if(wall_on_right() || (center < 1.5*HUG_DIST)) {
+	msg.angular.z = get_right_angle();
+      }
+      else {
+	msg.angular.z = PI/2;
+      }
+      break;
+      
+    case CORNER: //There's a barrier, so the robot must turn
+      if(wall_on_right()) {
+	state = FOLLOW_WALL;
+	should_publish = false;
+#if DEBUG
+	std::cout << "STATE_CHANGE Turned the corner. Following new wall" << std::endl;
+#endif
+      }
+      else if(isinf(data.ranges[comp_angle])) {
+	msg.angular.z = get_right_angle();
+	msg.linear.x = 0.0;
+	should_publish = true;
+      }
+      else {
+	msg.angular.z = get_front_angle();
+	msg.linear.x = 0.0;
+	should_publish = true;
+      }
+      break;
+      
+    default: //This should never happen
+      std::cerr << "ERROR: unknown state " << state << std::endl;
+      exit(state);
     }
 
     if(should_publish) {
       pub.publish(msg);   //This line is for publishing. It publishes to '/cmd_vel'
     }
-    
+#if DEBUG
+    else {
+      std::cout << "STATE_CHANGE Changed state to " << state << std::endl;
+    }
+#endif
   }
 }	
