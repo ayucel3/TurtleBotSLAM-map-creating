@@ -1,5 +1,7 @@
 #include <ros/ros.h>
 #include <geometry_msgs/Twist.h>
+#include <nav_msgs/Odometry.h>
+#include <ros/duration.h>
 #include <sensor_msgs/LaserScan.h>
 #include <ros/console.h>
 #include <iostream>
@@ -17,17 +19,18 @@
 #define CHANGE_STATE(newState) state = newState
 #endif
 
-enum State { FOLLOW_WALL, CHECK_CORNER, TURN_RIGHT ,START , TURN_LEFT};
+enum State { START, WALL_IN_FRONT, WALL_ON_RIGHT };
 
-const double PI = 3.41592653589793238;
+const double PI = 3.1415926535897932384626433832795;
 const float HUG_DIST = 0.5;
-const int comp_angle = 5;
+const int comp_angle = 20;
 const float threshold_parallel = 0.005;
 const float linear_speed = 0.2;
-const double angular_speed = PI/8;
+const double angular_speed = PI/2;
 float front = 0.0, back = 0.0, center = 0.0;
 
 sensor_msgs::LaserScan data;
+nav_msgs::Odometry odom;
 
 
 //Taking the vision info
@@ -40,25 +43,63 @@ void callback_laser(const sensor_msgs::LaserScan::ConstPtr& laser_msg)
   data.scan_time = laser_msg->scan_time;
   data.range_min = laser_msg->range_min;
   data.range_max = laser_msg->range_max;
-  data.ranges = laser_msg->ranges;
-  data.intensities = laser_msg->intensities;
+  for(int i = 0; i < 360; i++) {
+    data.ranges[i] = laser_msg->ranges[i];
+    data.intensities[i] = laser_msg->intensities[i];
+  }
   front = data.ranges[270 + comp_angle];
   back = data.ranges[270 - comp_angle];
   center = data.ranges[270];
+}
+
+void callback_odometry(const nav_msgs::Odometry::ConstPtr &odom_msg) {
+  odom.pose = odom_msg->pose;
+  odom.twist = odom_msg->twist;
+}
+
+float front_turn_angle() {
+  float a = data.ranges[0], b = data.ranges[comp_angle], C = RAD_FROM_DEG(comp_angle);
+  float wall_dist = sqrt(pow(a,2) + pow(b,2) - 2*a*b*cos(C));
+  float wall_angle = acos((pow(a,2) + pow(wall_dist,2) - pow(b,2))/(2*a*wall_dist));
+  return PI - wall_angle;
+}
+
+float right_turn_angle() {
+  float C = RAD_FROM_DEG(comp_angle);
+  float wall_dist = sqrt(pow(center,2) + pow(front,2) - 2*center*front*cos(C));
+  float wall_angle = acos((pow(center,2) + pow(wall_dist,2) - pow(front,2))/(2*center*wall_dist));
+  return PI/2 - wall_angle;
 }
 
 bool there_is_wall(){
   return !isinf(data.ranges[0]);
 }
 
-bool wall_found(float factor = 1.0){
-  return data.ranges[0] < factor*HUG_DIST;
+bool wall_in_front(float factor = 1.0){
+  return data.ranges[0] <= factor*HUG_DIST + 0.05;
 }
 
 bool wall_on_right(float factor = 1.0){
   return !isinf(center) && (center <= factor*HUG_DIST + 0.05);
 }
 
+void turn(float radians, ros::Publisher pub, float linvel = 0.0) {
+  float duration = abs(radians)/angular_speed;
+  geometry_msgs::Twist msg;
+  msg.angular.x = 0;
+  msg.angular.y = 0;
+  msg.linear.y = 0;
+  msg.linear.z = 0;
+  msg.linear.x = linvel;
+  msg.angular.z = (radians < 0.0)?(-angular_speed):(angular_speed);
+#if DEBUG
+  std::cout << "Should take " << duration << " seconds to turn " << radians << std::endl;
+#endif
+  pub.publish(msg);
+  
+  ros::Duration(abs(radians)/angular_speed).sleep();
+  
+}
 
 int main(int argc, char **argv)
 {
@@ -70,15 +111,23 @@ int main(int argc, char **argv)
 
   ros::Subscriber sub_laser = nh.subscribe("/scan", 1000, callback_laser);
 	
-	
+#if DEBUG
+  std::cout << "initialized publisher and subscriber" << std::endl;
+#endif
   ros::Rate rate(4);
   rate.sleep();
-
+#if DEBUG
+  std::cout << "Initialized rate and slept" << std::endl;
+#endif
   ros::spinOnce();
-
+#if DEBUG
+  std::cout << "Spun once" << std::endl;
+#endif
   State state = START;
   geometry_msgs::Twist msg;
-
+#if DEBUG
+  std::cout << "initialized state and msg" << std::endl;
+#endif
   msg.angular.x = 0.0;
   msg.angular.y = 0.0;
   msg.linear.y = 0.0;
@@ -86,95 +135,46 @@ int main(int argc, char **argv)
   float which_way = 0.0;
   bool searching_state = false;
   bool corner = false;
+  bool turning = false;
 
 #if DEBUG
   std::cout << "Starting" << std::endl;
 #endif
-
+  
+  float turn_angle;
   while (ros::ok()) {
     switch(state) {
 
-    case START: //JUST TO FIND THE FIRST WALL THERE IS GAP ON THE RIGHT SIDE WHICH thats why needed to seperate inital state after that we ll hopefully have the wall on our right side 
-	if(wall_found()){
-	  CHANGE_STATE(FOLLOW_WALL);
-		searching_state = false;
-	}
-	else{
-		msg.angular.z = 0;
-		msg.linear.x = linear_speed;
-	}
-
-        break;
-      
-    case FOLLOW_WALL: //MAIN STATEMENT robot always trys to move forward and if there is wall stops to turn and if the right side is not a wall calls turn right
-	if(wall_found()){
-		msg.angular.z = angular_speed;
-		msg.linear.x = 0;
-		CHANGE_STATE(CHECK_CORNER);
-	}
-	else if(!wall_on_right()){//This is to be able to turn right when there is no wall but we can not do this when we start because chairs on the right gives inf at the start so agent goes crazy thats why we needed start state to just move the agent to wall directly.
-	  CHANGE_STATE(TURN_RIGHT);
-		
-	}
-	else{
-		msg.angular.z = 0;
-		msg.linear.x = linear_speed;
-	}
-
-        break;
-
-      
-    case CHECK_CORNER: //THIS Statement is just for getting sleep time and detecting corners when FOLLOW_WALL detects there is a wall a head
-	if(wall_on_right() and wall_found()){ //for corner
-		sleep(1);
-		CHANGE_STATE(TURN_LEFT);
-		corner = true;
-	}
-	else if(wall_on_right()){ //for just a side
-	  CHANGE_STATE(FOLLOW_WALL);
-	}
-	else{
-		sleep(1);
-	}
+    case START:
+      if(wall_on_right()) {
+	CHANGE_STATE(WALL_ON_RIGHT);
+      }
+      else if(wall_in_front()) {
+	CHANGE_STATE(WALL_IN_FRONT);
+      }
+      else {
+	msg.linear.x = linear_speed;
+	msg.angular.z = 0.0;
+	pub.publish(msg);
+	rate.sleep();
+      }
       break;
-      
-    case TURN_RIGHT: //IF we are in searching state which means the right wall is lost or too far it will enter the first if and searching state will be set to true and also it will start turning to right
-	if(!wall_on_right()){
-		if(searching_state){// This code only runs once when it is in search state sleep is used to be able to turn the agent 
-			sleep(1);
-			CHANGE_STATE(START);
-			
-		}
-		else {
-		  msg.angular.z = -angular_speed*2;
-		  msg.linear.x = 0;
-		  searching_state = true;
-		}
-	}
-	else{
-		sleep(1);
-		CHANGE_STATE(FOLLOW_WALL);//THis part is to set agent to normal state which is going forward and finding walls
-	}
-      break;
-
-    case TURN_LEFT: //This is to handle corners
-	if(corner){
-		msg.angular.z = angular_speed;
-		msg.linear.x = 0;
-		corner = false;
-	}
-	else{
-		sleep(1);
-		CHANGE_STATE(FOLLOW_WALL);
-	}
-      break;
+    case WALL_IN_FRONT:
+      turn_angle = front_turn_angle();
+      turn(turn_angle, pub);
+      CHANGE_STATE(WALL_ON_RIGHT);
+#if DEBUG
+      std::cout << "Turned " << turn_angle << " rad to be || to wall" << std::endl;
+#endif
+    case WALL_ON_RIGHT:
+      msg.linear.x = linear_speed;
+      msg.angular.z = 0.0;
+      pub.publish(msg);
 
     default: //This should never happen
       std::cerr << "ERROR: unknown state " << state << std::endl;
       exit(state);
     }
-   rate.sleep();
    ros::spinOnce();
-   pub.publish(msg);
   }
 }	
