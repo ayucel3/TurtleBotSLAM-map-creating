@@ -17,10 +17,10 @@
 #define CHANGE_STATE(newState) state = newState
 #endif
 
-enum State { FOLLOW_WALL, CHECK_CORNER, TURN_RIGHT ,START , TURN_LEFT};
+enum State { FOLLOW_WALL, TURN_RIGHT ,START};
 
 const double PI = 3.41592653589793238;
-const float HUG_DIST = 0.5;
+const float HUG_DIST = 1;
 const int comp_angle = 5;
 const float threshold_parallel = 0.005;
 const float linear_speed = 0.2;
@@ -47,18 +47,91 @@ void callback_laser(const sensor_msgs::LaserScan::ConstPtr& laser_msg)
   center = data.ranges[270];
 }
 
-bool there_is_wall(){
-  return !isinf(data.ranges[0]);
+bool there_is_wall_behind(){
+   int i = 180;
+   while (i <= 270){
+	if(data.ranges[i] < HUG_DIST + 0.01){
+		return true;
+	}
+   	i += 10;
+   }
+	
+  return (false);
+}
+void turn_right(ros::Publisher pub){
+  double right = data.ranges[270];
+  geometry_msgs::Twist msg;
+  while (true){
+  	if(data.ranges[0] - right  < 0.001){
+		break;
+	}
+	msg.linear.x = 0;
+	msg.angular.z = -PI/8;
+	pub.publish(msg);
+	ros::spinOnce();
+  }
+}
+void turn_left(ros::Publisher pub){
+  double front = data.ranges[0];
+  geometry_msgs::Twist msg;
+  if(data.ranges[270] - front < 0.001){//to handle 45 degrees...
+   	msg.linear.x = 0;
+	msg.angular.z = PI/8;
+	pub.publish(msg);
+	ros::spinOnce();
+  }
+  while (true){
+  	if(data.ranges[270] - front < 0.001){
+		break;
+	}
+	msg.linear.x = 0;
+	msg.angular.z = PI/8;
+	pub.publish(msg);
+	ros::spinOnce();
+  }
+}
+
+void go_to_inf(ros::Publisher pub){
+  geometry_msgs::Twist msg;
+  msg.angular.z = -PI/2;
+  msg.linear.x = 0;
+  pub.publish(msg);
+  ros::Duration(1).sleep();
+  while (true){
+  	if((data.ranges[0] < 2) and !isinf(data.ranges[350]) and !isinf(data.ranges[10])){
+		break;
+	}
+	msg.linear.x = linear_speed;
+	msg.angular.z = 0;
+	pub.publish(msg);
+	ros::spinOnce();
+  }
+}
+
+void move_towards_wall(ros::Publisher pub){
+  double front = data.ranges[0];
+  geometry_msgs::Twist msg;
+  while (true){
+  	if((data.ranges[0] - front  <= HUG_DIST + 0.1) or (data.ranges[5] < HUG_DIST) or (data.ranges[355] < HUG_DIST)){ // WHEN IT Gets close to hug dist in breaks or these angles become closer to avoid wall collisions it ll break
+		break;
+	}
+	msg.linear.x = linear_speed;
+	msg.angular.z = 0;
+	pub.publish(msg);
+	ros::spinOnce();
+  }
 }
 
 bool wall_found(float factor = 1.0){
-  return data.ranges[0] < factor*HUG_DIST;
+  return data.ranges[0] <= factor*HUG_DIST;
+}
+bool wall_on_right_inf(){
+  return isinf(center);
 }
 
-bool wall_on_right(float factor = 1.0){
-  return !isinf(center) && (center <= factor*HUG_DIST + 0.05);
+bool wall_on_right_close(float factor = 1.0){
+  return (center <= factor*HUG_DIST + 0.05);
 }
-
 
 int main(int argc, char **argv)
 {
@@ -97,7 +170,6 @@ int main(int argc, char **argv)
     case START: //JUST TO FIND THE FIRST WALL THERE IS GAP ON THE RIGHT SIDE WHICH thats why needed to seperate inital state after that we ll hopefully have the wall on our right side 
 	if(wall_found()){
 	  CHANGE_STATE(FOLLOW_WALL);
-		searching_state = false;
 	}
 	else{
 		msg.angular.z = 0;
@@ -108,13 +180,13 @@ int main(int argc, char **argv)
       
     case FOLLOW_WALL: //MAIN STATEMENT robot always trys to move forward and if there is wall stops to turn and if the right side is not a wall calls turn right
 	if(wall_found()){
-		msg.angular.z = angular_speed;
+		turn_left(pub);
+                msg.angular.z = 0;
 		msg.linear.x = 0;
-		CHANGE_STATE(CHECK_CORNER);
 	}
-	else if(!wall_on_right()){//This is to be able to turn right when there is no wall but we can not do this when we start because chairs on the right gives inf at the start so agent goes crazy thats why we needed start state to just move the agent to wall directly.
-	  CHANGE_STATE(TURN_RIGHT);
 		
+	else if(!wall_on_right_close() or wall_on_right_inf()){
+	  	CHANGE_STATE(TURN_RIGHT);
 	}
 	else{
 		msg.angular.z = 0;
@@ -122,52 +194,26 @@ int main(int argc, char **argv)
 	}
 
         break;
-
-      
-    case CHECK_CORNER: //THIS Statement is just for getting sleep time and detecting corners when FOLLOW_WALL detects there is a wall a head
-	if(wall_on_right() and wall_found()){ //for corner
-		sleep(1);
-		CHANGE_STATE(TURN_LEFT);
-		corner = true;
-	}
-	else if(wall_on_right()){ //for just a side
-	  CHANGE_STATE(FOLLOW_WALL);
-	}
-	else{
-		sleep(1);
-	}
-      break;
       
     case TURN_RIGHT: //IF we are in searching state which means the right wall is lost or too far it will enter the first if and searching state will be set to true and also it will start turning to right
-	if(!wall_on_right()){
-		if(searching_state){// This code only runs once when it is in search state sleep is used to be able to turn the agent 
-			sleep(1);
-			CHANGE_STATE(START);
-			
-		}
-		else {
-		  msg.angular.z = -angular_speed*2;
-		  msg.linear.x = 0;
-		  searching_state = true;
-		}
+	if (wall_on_right_inf()){
+		go_to_inf(pub);//if the right side is inf we want to go there to examine
+		CHANGE_STATE(FOLLOW_WALL);
+		msg.angular.z = 0;
+	}	
+	else if(!wall_on_right_close()){
+		turn_right(pub);
+		move_towards_wall(pub);
+		msg.angular.z = 0;
+                CHANGE_STATE(FOLLOW_WALL);
 	}
 	else{
-		sleep(1);
+		msg.angular.z = 0;
 		CHANGE_STATE(FOLLOW_WALL);//THis part is to set agent to normal state which is going forward and finding walls
 	}
+	msg.linear.x = linear_speed;//this is what we want if something bad happens it needs to keep moving to get some new sensors if its not stuck
       break;
 
-    case TURN_LEFT: //This is to handle corners
-	if(corner){
-		msg.angular.z = angular_speed;
-		msg.linear.x = 0;
-		corner = false;
-	}
-	else{
-		sleep(1);
-		CHANGE_STATE(FOLLOW_WALL);
-	}
-      break;
 
     default: //This should never happen
       std::cerr << "ERROR: unknown state " << state << std::endl;
