@@ -48,22 +48,15 @@ void callback_laser(const sensor_msgs::LaserScan::ConstPtr& laser_msg)
 }
 
 bool there_is_wall(){
-	if(!isinf(data.ranges[0])){return true;}
-	return false;
+  return !isinf(data.ranges[0]);
 }
 
-bool wall_found(){
-	if(data.ranges[0] < HUG_DIST){
-		return true;
-	}
-	return false;
+bool wall_found(float factor = 1.0){
+  return data.ranges[0] < factor*HUG_DIST;
 }
 
-bool wall_on_right(){
- if(isinf(center) or (center > HUG_DIST + 0.05) ){//to have some upper limit biger than hug dist to give some capability to bot
-	return false;
- }
- return true;
+bool wall_on_right(float factor = 1.0){
+  return !isinf(center) && (center <= factor*HUG_DIST + 0.05);
 }
 
 
