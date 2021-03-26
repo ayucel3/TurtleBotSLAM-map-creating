@@ -8,6 +8,15 @@
 #define DEBUG 1
 #define RAD_FROM_DEG(x) (x * PI/180)
 
+#if DEBUG
+#define CHANGE_STATE(newState) do { \
+  state = newState; \
+  std::cout << "STATE_CHANGE to " << #newState << std::endl; \
+  }while(0)
+#else
+#define CHANGE_STATE(newState) state = newState
+#endif
+
 enum State { WALL_SEARCH, FOUND_WALL, FOLLOW_WALL, CORNER };
 
 const double PI = 3.41592653589793238;
@@ -60,15 +69,6 @@ bool wall_getting_further() {
   return !equal(front, back) && (front > back);
 }
 
-bool wall_in_front() {
-  if(isinf(data.ranges[0])) return false;
-  return equal(HUG_DIST, data.ranges[0]) || (data.ranges[0] < HUG_DIST);
-}
-
-bool wall_on_right() {
-  return !isinf(center) && (equal(HUG_DIST, center) || (center < HUG_DIST));
-}
-
 // bool keep_going(){
 // 	if (isinf(center) or data.ranges[0] < HUG_DIST){
 // 		return false;
@@ -103,6 +103,14 @@ float get_right_angle() {
   return PI/2 - wall_angle;
 }
 
+bool wall_in_front(float factor = 1.0) {
+  if(isinf(data.ranges[0])) return false;
+  return (equal(factor*HUG_DIST, data.ranges[0]) || (data.ranges[0] < factor*HUG_DIST)) && (get_front_angle() > RAD_FROM_DEG(80));
+}
+
+bool wall_on_right(float factor = 1.0) {
+  return !isinf(center) && (equal(factor*HUG_DIST, center) || (center < factor*HUG_DIST));
+}
 
 
 int main(int argc, char **argv)
@@ -135,18 +143,17 @@ int main(int argc, char **argv)
       
     case WALL_SEARCH: //Robot is lost! Where's the wall?
       if(wall_on_right()) {
-	state = FOLLOW_WALL;
+	CHANGE_STATE(FOLLOW_WALL);
 	should_publish = false;
-#if DEBUG
-	std::cout << "STATE_CHANGE Wall on right. Following" << std::endl;
-#endif
       }
       if(wall_in_front()) {
-	state = FOUND_WALL;
+	CHANGE_STATE(FOUND_WALL);
 	should_publish = false;
-#if DEBUG
-	std::cout << "STATE_CHANGE Found a wall. Turning left" << std::endl;
-#endif
+      }
+      else if(wall_in_front(2)) {
+	msg.angular.z = get_front_angle();
+	msg.linear.x = linear_speed;
+	should_publish = true;
       }
       else {
 	msg.angular.z = 0.0;
@@ -157,13 +164,10 @@ int main(int argc, char **argv)
       
     case FOUND_WALL: //There's a wall in front, so prepare to follow it
       if(wall_on_right()) {
-	state = FOLLOW_WALL;
+	CHANGE_STATE(FOLLOW_WALL);
 	should_publish = false;
-#if DEBUG
-	std::cout << "STATE_CHANGE Wall on right. Following" << std::endl;
-#endif
       }
-      else if(center < 2*HUG_DIST) {
+      else if(wall_on_right(2.0)) {
 	msg.angular.z = get_right_angle();
 	msg.linear.x = 0.0;
 	should_publish = true;
@@ -178,50 +182,40 @@ int main(int argc, char **argv)
     case FOLLOW_WALL: //There's a wall on the right, so follow it
       msg.linear.x = linear_speed;
       should_publish = true;
-      if(wall_in_front()) {
-	state = CORNER;
+      if(wall_in_front(2)) {
+	CHANGE_STATE(CORNER);
 	should_publish = false;
-#if DEBUG
-	std::cout << "STATE_CHANGE Found a corner." << std::endl;
-#endif
       }
       else if(isinf(front)) {
 	if(isinf(center)) {
-	  state = WALL_SEARCH;
+	  CHANGE_STATE(WALL_SEARCH);
 	  should_publish = false;
-#if DEBUG
-	  std::cout << "STATE_CHANGE Lost the wall on the right. Now searching for another" << std::endl;
-#endif
 	}
 	else {
 	  msg.angular.z = RAD_FROM_DEG(comp_angle-90);
 	}
       }
-      else if(wall_on_right() || (center < 1.5*HUG_DIST)) {
+      else if(wall_on_right(1.5)) {
 	msg.angular.z = get_right_angle();
       }
       else {
-	msg.angular.z = PI/2;
+	msg.angular.z = -PI/2;
       }
       break;
       
     case CORNER: //There's a barrier, so the robot must turn
-      if(wall_on_right()) {
-	state = FOLLOW_WALL;
-	should_publish = false;
-#if DEBUG
-	std::cout << "STATE_CHANGE Turned the corner. Following new wall" << std::endl;
-#endif
-      }
-      else if(isinf(data.ranges[comp_angle])) {
-	msg.angular.z = get_right_angle();
-	msg.linear.x = 0.0;
+      if(wall_in_front(3)) {
+	msg.angular.z = get_front_angle();
+	msg.linear.x = linear_speed;
 	should_publish = true;
+      }
+      else if(wall_on_right(2)) {
+	CHANGE_STATE(FOLLOW_WALL);
+	should_publish = false;
       }
       else {
-	msg.angular.z = get_front_angle();
-	msg.linear.x = 0.0;
-	should_publish = true;
+	CHANGE_STATE(WALL_SEARCH);
+	should_publish = false;
       }
       break;
       
@@ -233,10 +227,6 @@ int main(int argc, char **argv)
     if(should_publish) {
       pub.publish(msg);   //This line is for publishing. It publishes to '/cmd_vel'
     }
-#if DEBUG
-    else {
-      std::cout << "STATE_CHANGE Changed state to " << state << std::endl;
-    }
-#endif
+    rate.sleep();
   }
 }	
