@@ -8,7 +8,16 @@
 #define DEBUG 1
 #define RAD_FROM_DEG(x) (x * PI/180)
 
-enum State { WALL_SEARCH, FOLLOW_WALL, TURN_RIGHT ,START , TURN_LEFT};
+#if DEBUG
+#define CHANGE_STATE(newState) do { \
+  state = newState; \
+  std::cout << "STATE_CHANGE Changed state to " << #newState << std::endl; \
+  } while(0)
+#else
+#define CHANGE_STATE(newState) state = newState
+#endif
+
+enum State { FOLLOW_WALL, CHECK_CORNER, TURN_RIGHT ,START , TURN_LEFT};
 
 const double PI = 3.41592653589793238;
 const float HUG_DIST = 0.5;
@@ -94,7 +103,7 @@ int main(int argc, char **argv)
 
     case START: //JUST TO FIND THE FIRST WALL THERE IS GAP ON THE RIGHT SIDE WHICH thats why needed to seperate inital state after that we ll hopefully have the wall on our right side 
 	if(wall_found()){
-		state = WALL_SEARCH;
+	  CHANGE_STATE(FOLLOW_WALL);
 		searching_state = false;
 	}
 	else{
@@ -104,14 +113,14 @@ int main(int argc, char **argv)
 
         break;
       
-    case WALL_SEARCH: //MAIN STATEMENT robot always trys to move forward and if there is wall stops to turn and if the right side is not a wall calls turn right
+    case FOLLOW_WALL: //MAIN STATEMENT robot always trys to move forward and if there is wall stops to turn and if the right side is not a wall calls turn right
 	if(wall_found()){
 		msg.angular.z = angular_speed;
 		msg.linear.x = 0;
-		state = FOLLOW_WALL;
+		CHANGE_STATE(CHECK_CORNER);
 	}
 	else if(!wall_on_right()){//This is to be able to turn right when there is no wall but we can not do this when we start because chairs on the right gives inf at the start so agent goes crazy thats why we needed start state to just move the agent to wall directly.
-		state = TURN_RIGHT;
+	  CHANGE_STATE(TURN_RIGHT);
 		
 	}
 	else{
@@ -122,14 +131,14 @@ int main(int argc, char **argv)
         break;
 
       
-    case FOLLOW_WALL: //THIS Statement is just for getting sleep time and detecting corners when WALL_SEARCH detects there is a wall a head
+    case CHECK_CORNER: //THIS Statement is just for getting sleep time and detecting corners when FOLLOW_WALL detects there is a wall a head
 	if(wall_on_right() and wall_found()){ //for corner
 		sleep(1);
-		state = TURN_LEFT;
+		CHANGE_STATE(TURN_LEFT);
 		corner = true;
 	}
 	else if(wall_on_right()){ //for just a side
-		state = WALL_SEARCH;
+	  CHANGE_STATE(FOLLOW_WALL);
 	}
 	else{
 		sleep(1);
@@ -140,16 +149,18 @@ int main(int argc, char **argv)
 	if(!wall_on_right()){
 		if(searching_state){// This code only runs once when it is in search state sleep is used to be able to turn the agent 
 			sleep(1);
-			state = START;
+			CHANGE_STATE(START);
 			
 		}
-		msg.angular.z = -angular_speed*2;
-		msg.linear.x = 0;
-		searching_state = true;
+		else {
+		  msg.angular.z = -angular_speed*2;
+		  msg.linear.x = 0;
+		  searching_state = true;
+		}
 	}
 	else{
 		sleep(1);
-		state = WALL_SEARCH;//THis part is to set agent to normal state which is going forward and finding walls
+		CHANGE_STATE(FOLLOW_WALL);//THis part is to set agent to normal state which is going forward and finding walls
 	}
       break;
 
@@ -161,7 +172,7 @@ int main(int argc, char **argv)
 	}
 	else{
 		sleep(1);
-		state = WALL_SEARCH;
+		CHANGE_STATE(FOLLOW_WALL);
 	}
       break;
 
