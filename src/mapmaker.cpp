@@ -51,7 +51,7 @@ bool wall_found(float factor = 1.0){
   return data.ranges[0] <= factor*HUG_DIST + 0.05;
 }
 bool wall_on_right_inf(){
-  return isinf(center);
+  return isinf(center) & isinf(front);
 }
 
 bool wall_on_right_close(float factor = 1.0){
@@ -95,7 +95,7 @@ void turn_left(ros::Publisher pub){
   	if(data.ranges[270] - front < 0.001){
 		break;
 	}
-	msg.linear.x = 0;
+	if(msg.linear.x < 0.05) msg.linear.x += 0.01;
 	msg.angular.z = PI/8;
 	pub.publish(msg);
 	ros::spinOnce();
@@ -105,14 +105,14 @@ void turn_left(ros::Publisher pub){
 void go_to_inf(ros::Publisher pub){
   geometry_msgs::Twist msg;
   msg.angular.z = -PI/2;
-  msg.linear.x = 0;
+  msg.linear.x = 0.1;
   pub.publish(msg);
   ros::Duration(1).sleep();
   while (true){
-    if(wall_found(3) and !isinf(data.ranges[350]) and !isinf(data.ranges[10])){
+    if(wall_found() and !isinf(data.ranges[350]) and !isinf(data.ranges[10])){
       break;
     }
-    if(wall_on_right_close(3) && !isinf(data.ranges[270+comp_angle]) && !isinf(data.ranges[270-comp_angle])) {
+    if(wall_on_right_close() and !isinf(data.ranges[280]) and !isinf(data.ranges[260])) {
       break;
     }
     msg.linear.x = linear_speed;
@@ -184,19 +184,28 @@ int main(int argc, char **argv)
       
     case FOLLOW_WALL: //MAIN STATEMENT robot always trys to move forward and if there is wall stops to turn and if the right side is not a wall calls turn right
 	if(wall_found()){
-		turn_left(pub);
-                msg.angular.z = 0;
-		msg.linear.x = 0;
+	  msg.linear.x = 0.0;
+	  for(int i = 271; i != 90; i = (i+1)%360)
+	    if(data.ranges[i] <= HUG_DIST/2) {
+	      msg.linear.x = -0.05;
+#if DEBUG
+	      std::cout << "Too close for comfort. Need to back up a bit" << std::endl;
+#endif
+	      break;
+	    }
+	  msg.angular.z = PI/6;
 	}
 		
-	else if(!wall_on_right_close() or wall_on_right_inf()){
+	else if(!wall_on_right_close(2) or wall_on_right_inf()){
 	  	CHANGE_STATE(TURN_RIGHT);
-		msg.linear.x = 0;
-		msg.angular.z = 0;
+		//msg.linear.x = 0;
+		//msg.angular.z = 0;
 	}
-	else{
-		msg.angular.z = 0;
-		msg.linear.x = linear_speed;
+	else {
+	  msg.angular.z = (back - front)/2;
+	  if(msg.angular.z < -PI/4) msg.angular.z = -PI/4;
+	  if(msg.angular.z > PI/4) msg.angular.z = PI/4;
+	  msg.linear.x = linear_speed;
 	}
 
         break;
@@ -208,7 +217,6 @@ int main(int argc, char **argv)
 #endif
 		go_to_inf(pub);//if the right side is inf we want to go there to examine
 		CHANGE_STATE(FOLLOW_WALL);
-		msg.angular.z = 0;
 	}	
 	else if(!wall_on_right_close()){
 #if DEBUG
