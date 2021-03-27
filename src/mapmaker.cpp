@@ -20,8 +20,8 @@
 enum State { FOLLOW_WALL, TURN_RIGHT ,START};
 
 const double PI = 3.41592653589793238;
-const float HUG_DIST = 1;
-const int comp_angle = 5;
+const float HUG_DIST = 0.75;
+const int comp_angle = 10;
 const float threshold_parallel = 0.005;
 const float linear_speed = 0.2;
 const double angular_speed = PI/8;
@@ -45,6 +45,17 @@ void callback_laser(const sensor_msgs::LaserScan::ConstPtr& laser_msg)
   front = data.ranges[270 + comp_angle];
   back = data.ranges[270 - comp_angle];
   center = data.ranges[270];
+}
+
+bool wall_found(float factor = 1.0){
+  return data.ranges[0] <= factor*HUG_DIST + 0.05;
+}
+bool wall_on_right_inf(){
+  return isinf(center);
+}
+
+bool wall_on_right_close(float factor = 1.0){
+  return (center <= factor*HUG_DIST + 0.05);
 }
 
 bool there_is_wall_behind(){
@@ -98,14 +109,18 @@ void go_to_inf(ros::Publisher pub){
   pub.publish(msg);
   ros::Duration(1).sleep();
   while (true){
-  	if((data.ranges[0] < 2) and !isinf(data.ranges[350]) and !isinf(data.ranges[10])){
-		break;
-	}
-	msg.linear.x = linear_speed;
-	msg.angular.z = 0;
-	pub.publish(msg);
-	ros::spinOnce();
+    if(wall_found(3) and !isinf(data.ranges[350]) and !isinf(data.ranges[10])){
+      break;
+    }
+    if(wall_on_right_close(3) && !isinf(data.ranges[270+comp_angle]) && !isinf(data.ranges[270-comp_angle])) {
+      break;
+    }
+    msg.linear.x = linear_speed;
+    msg.angular.z = 0;
+    pub.publish(msg);
+    ros::spinOnce();
   }
+  ros::Duration(0.75).sleep();
 }
 
 void move_towards_wall(ros::Publisher pub){
@@ -120,17 +135,6 @@ void move_towards_wall(ros::Publisher pub){
 	pub.publish(msg);
 	ros::spinOnce();
   }
-}
-
-bool wall_found(float factor = 1.0){
-  return data.ranges[0] <= factor*HUG_DIST;
-}
-bool wall_on_right_inf(){
-  return isinf(center);
-}
-
-bool wall_on_right_close(float factor = 1.0){
-  return (center <= factor*HUG_DIST + 0.05);
 }
 
 int main(int argc, char **argv)
@@ -187,6 +191,8 @@ int main(int argc, char **argv)
 		
 	else if(!wall_on_right_close() or wall_on_right_inf()){
 	  	CHANGE_STATE(TURN_RIGHT);
+		msg.linear.x = 0;
+		msg.angular.z = 0;
 	}
 	else{
 		msg.angular.z = 0;
@@ -197,11 +203,17 @@ int main(int argc, char **argv)
       
     case TURN_RIGHT: //IF we are in searching state which means the right wall is lost or too far it will enter the first if and searching state will be set to true and also it will start turning to right
 	if (wall_on_right_inf()){
+#if DEBUG
+	  std::cout << "Where did the right wall go?" << std::endl;
+#endif
 		go_to_inf(pub);//if the right side is inf we want to go there to examine
 		CHANGE_STATE(FOLLOW_WALL);
 		msg.angular.z = 0;
 	}	
 	else if(!wall_on_right_close()){
+#if DEBUG
+	  std::cout << "Right dist is " << center << std::endl;
+#endif
 		turn_right(pub);
 		move_towards_wall(pub);
 		msg.angular.z = 0;
