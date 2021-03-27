@@ -17,14 +17,15 @@
 #define CHANGE_STATE(newState) state = newState
 #endif
 
-enum State { FOLLOW_WALL, TURN_RIGHT ,START};
+enum State { START, FOLLOW_WALL, TURN_RIGHT, SQUEEZED};
 
 const double PI = 3.41592653589793238;
-const float HUG_DIST = 0.75;
+const float HUG_DIST = 1;
 const int comp_angle = 10;
 const float threshold_parallel = 0.005;
 const float linear_speed = 0.2;
 const double angular_speed = PI/8;
+const double doorway_width = (double)10/11;
 float front = 0.0, back = 0.0, center = 0.0;
 
 sensor_msgs::LaserScan data;
@@ -45,6 +46,25 @@ void callback_laser(const sensor_msgs::LaserScan::ConstPtr& laser_msg)
   front = data.ranges[270 + comp_angle];
   back = data.ranges[270 - comp_angle];
   center = data.ranges[270];
+}
+
+bool squeezed_sides() {
+  return data.ranges[90] + data.ranges[270] <= doorway_width;
+}
+
+int squeezed() {
+  int min = -1;
+  for(int i = 0; i < 180; i++) {
+    if((data.ranges[i] + data.ranges[i+180] <= doorway_width) &&
+       ((min < 0) || (data.ranges[i] + data.ranges[i+180] < data.ranges[min] + data.ranges[min+180]))) {
+      min = i;
+    }
+  }
+  return min;
+}
+
+bool squeezed(int angle) {
+  return data.ranges[angle%360] + data.ranges[(angle+180)%360] <= doorway_width;
 }
 
 bool wall_found(float factor = 1.0){
@@ -102,25 +122,22 @@ void turn_left(ros::Publisher pub){
   }
 }
 
-void go_to_inf(ros::Publisher pub){
+bool go_to_inf(ros::Publisher pub){
   geometry_msgs::Twist msg;
   msg.angular.z = -PI/2;
   msg.linear.x = 0;
   pub.publish(msg);
   ros::Duration(1).sleep();
-  while (true){
-    if(wall_found(3) and !isinf(data.ranges[350]) and !isinf(data.ranges[10])){
-      break;
-    }
-    if(wall_on_right_close(3) && !isinf(data.ranges[270+comp_angle]) && !isinf(data.ranges[270-comp_angle])) {
-      break;
+  while (!squeezed_sides()){
+    if(wall_found() and !isinf(data.ranges[350]) and !isinf(data.ranges[10])){
+      return false;
     }
     msg.linear.x = linear_speed;
     msg.angular.z = 0;
     pub.publish(msg);
     ros::spinOnce();
   }
-  ros::Duration(0.75).sleep();
+  return true;
 }
 
 void move_towards_wall(ros::Publisher pub){
@@ -169,6 +186,7 @@ int main(int argc, char **argv)
 #endif
 
   while (ros::ok()) {
+    int squeeze_angle = squeezed();
     switch(state) {
 
     case START: //JUST TO FIND THE FIRST WALL THERE IS GAP ON THE RIGHT SIDE WHICH thats why needed to seperate inital state after that we ll hopefully have the wall on our right side 
@@ -185,15 +203,28 @@ int main(int argc, char **argv)
     case FOLLOW_WALL: //MAIN STATEMENT robot always trys to move forward and if there is wall stops to turn and if the right side is not a wall calls turn right
 	if(wall_found()){
 		turn_left(pub);
-                msg.angular.z = 0;
-		msg.linear.x = 0;
+                msg.angular.z = angular_speed;
+		msg.linear.x = linear_speed/5;
 	}
 		
 	else if(!wall_on_right_close() or wall_on_right_inf()){
 	  	CHANGE_STATE(TURN_RIGHT);
-		msg.linear.x = 0;
-		msg.angular.z = 0;
+		//msg.linear.x = 0;
+		//msg.angular.z = 0;
 	}
+
+	else if(0 <= squeeze_angle) {
+	  if(squeezed(90)) {
+	    msg.linear.x = linear_speed;
+	    msg.angular.z = 0.0;
+	    CHANGE_STATE(SQUEEZED);
+	  }
+	  else {
+	    msg.angular.z = -angular_speed;
+	    msg.linear.x = 0.0;
+	  }  
+	}
+	
 	else{
 		msg.angular.z = 0;
 		msg.linear.x = linear_speed;
@@ -206,9 +237,9 @@ int main(int argc, char **argv)
 #if DEBUG
 	  std::cout << "Where did the right wall go?" << std::endl;
 #endif
-		go_to_inf(pub);//if the right side is inf we want to go there to examine
-		CHANGE_STATE(FOLLOW_WALL);
-		msg.angular.z = 0;
+	  if(go_to_inf(pub)) CHANGE_STATE(SQUEEZED);
+	  else CHANGE_STATE(FOLLOW_WALL);
+	  //msg.angular.z = 0;
 	}	
 	else if(!wall_on_right_close()){
 #if DEBUG
@@ -226,13 +257,32 @@ int main(int argc, char **argv)
 	msg.linear.x = linear_speed;//this is what we want if something bad happens it needs to keep moving to get some new sensors if its not stuck
       break;
 
+    case SQUEEZED:
+      if(wall_found(doorway_width/HUG_DIST)) {
+	msg.angular.z = angular_speed;
+	msg.linear.x = 0;
+      }
+      else if(squeezed(90)) {
+	msg.linear.x = linear_speed;
+	msg.angular.z = 0;
+      }
+      else if(wall_on_right_close(doorway_width/HUG_DIST)) {
+	CHANGE_STATE(FOLLOW_WALL);
+	msg.angular.z = 0;
+	msg.linear.x = 0;
+      }
+      else {
+	msg.linear.x = linear_speed;
+	msg.angular.z = -angular_speed;
+      }
+      break;
 
     default: //This should never happen
       std::cerr << "ERROR: unknown state " << state << std::endl;
       exit(state);
     }
+   pub.publish(msg);
    rate.sleep();
    ros::spinOnce();
-   pub.publish(msg);
   }
 }	
